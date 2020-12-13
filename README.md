@@ -10,3 +10,16 @@ to be from egg-bot. I have yet to try the hatcher, so I can offer no
 comments as to whether it has scaling issues (but I didn't see the magic
 values to indicate that it has issues, for what it's worth).
 
+December 2020
+Reviewed Eleksmaker.py to get rid of calls to deprecated Inkscape libraries
+(refer to https://wiki.inkscape.org/wiki/index.php/Updating_your_Extension_for_1.0
+and https://inkscape.gitlab.io/inkscape/doxygen-extensions/deprecated_8py_source.html
+and https://inkscape.gitlab.io/extensions/documentation/index.html)
+
+Also updated some old Python 2 to Python 3
+
+Seems to work on simple drawings in Inkscape as well as bitmaps traced to
+path (refer to examples from Eleksmaker in https://wiki.eleksmaker.com/doku.php?id=inkscape)
+
+Managed to send generated GCode from Inkscape 1.0 to EleksDraw machine using Candle
+(all on MacOS)
