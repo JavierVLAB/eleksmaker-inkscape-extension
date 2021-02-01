@@ -23,3 +23,5 @@ path (refer to examples from Eleksmaker in https://wiki.eleksmaker.com/doku.php?
 
 Managed to send generated GCode from Inkscape 1.0 to EleksDraw machine using Candle
 (all on MacOS)
+
+For scaling issues, see lines 3114 and 3119
