@@ -2712,7 +2712,7 @@ class laser_gcode(inkex.Effect):
     def apply_transforms(self,g,csp):
         trans = self.get_transforms(g)
         if trans != []:
-            Path(csp).transform(Transform(trans)).to_arrays()
+            csp.transform(Transform(trans))
         return csp
 
 
