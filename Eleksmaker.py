@@ -1,14 +1,15 @@
-#!/usr/bin/env python 
+#!/usr/bin/env python
 """
 Modified by Jay Johnson 2015, J Tech Photonics, Inc., jtechphotonics.com 
 modified by Adam Polak 2014, polakiumengineering.org
+Modified by Jonathan Jamieson 2021 to support Inkscape 1.0+
 
 based on Copyright (C) 2009 Nick Drobchenko, nick@cnc-club.ru
 based on gcode.py (C) 2007 hugomatic... 
 based on addnodes.py (C) 2005,2007 Aaron Spike, aaron@ekips.org
 based on dots.py (C) 2005 Aaron Spike, aaron@ekips.org
 based on interp.py (C) 2005 Aaron Spike, aaron@ekips.org
-based on bezier.py (C) 2005 Aaron Spike, aaron@ekips.org
+based on bezmisc.py (C) 2005 Aaron Spike, aaron@ekips.org
 based on cubicsuperpath.py (C) 2005 Aaron Spike, aaron@ekips.org
 
 This program is free software; you can redistribute it and/or modify
@@ -25,18 +26,21 @@ You should have received a copy of the GNU General Public License
 along with this program; if not, write to the Free Software
 Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 """
-import inkex
-### , simplestyle, simplepath
-### import cubicsuperpath, simpletransform, bezmisc
+#import inkex, simplestyle, simplepath
+#import cubicsuperpath, simpletransform, bezmisc
+
 from lxml import etree
-from inkex.paths import CubicSuperPath
-from inkex.transforms import Transform
-from inkex.styles import Style
-from inkex import bezier
+
+from plot_utils_import import from_dependency_import
+inkex = from_dependency_import('ink_extensions.inkex')
+simplepath = from_dependency_import('ink_extensions.simplepath')
+simpletransform = from_dependency_import('ink_extensions.simpletransform')
+simplestyle = from_dependency_import('ink_extensions.simplestyle')
+cubicsuperpath = from_dependency_import('ink_extensions.cubicsuperpath')
+bezmisc = from_dependency_import('ink_extensions.bezmisc')
 
 import os
 import math
-### import bezmisc
 import re
 import copy
 import sys
@@ -48,29 +52,34 @@ import random
 import gettext
 _ = gettext.gettext
 
- 
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning) 
+
+
 ### Check if inkex has errormsg (0.46 version doesnot have one.) Could be removed later.
 if "errormsg" not in dir(inkex):
     inkex.errormsg = lambda msg: sys.stderr.write((unicode(msg) + "\n").encode("UTF-8"))
 
-
-def bezierslopeatt(bez,t):
-    ax,ay,bx,by,cx,cy,x0,y0=bezier.bezierparameterize(bez)
-    dx=3*ax*(t**2)+2*bx*t+cx
-    dy=3*ay*(t**2)+2*by*t+cy
-    if dx==dy==0 : 
-        dx = 6*ax*t+2*bx
-        dy = 6*ay*t+2*by
-        if dx==dy==0 : 
-            dx = 6*ax
-            dy = 6*ay
-            if dx==dy==0 : 
-                print_("Slope error x = %s*t^3+%s*t^2+%s*t+%s, y = %s*t^3+%s*t^2+%s*t+%s,  t = %s, dx==dy==0" % (ax,bx,cx,dx,ay,by,cy,dy,t))
-                print_(((bx0,by0),(bx1,by1),(bx2,by2),(bx3,by3)))
+def bezierslopeatt(input_coords, t):
+    ((bx0, by0), (bx1, by1), (bx2, by2), (bx3, by3)) = input_coords
+    ax, ay, bx, by, cx, cy, x0, y0 = bezmisc.bezierparameterize(((bx0, by0), (bx1, by1), (bx2, by2), (bx3, by3)))
+    dx = 3 * ax * (t ** 2) + 2 * bx * t + cx
+    dy = 3 * ay * (t ** 2) + 2 * by * t + cy
+    if dx == dy == 0:
+        dx = 6 * ax * t + 2 * bx
+        dy = 6 * ay * t + 2 * by
+        if dx == dy == 0:
+            dx = 6 * ax
+            dy = 6 * ay
+            if dx == dy == 0:
+                print_("Slope error x = %s*t^3+%s*t^2+%s*t+%s, y = %s*t^3+%s*t^2+%s*t+%s,  t = %s, dx==dy==0" % (
+                    ax, bx, cx, dx, ay, by, cy, dy, t))
+                print_(((bx0, by0), (bx1, by1), (bx2, by2), (bx3, by3)))
                 dx, dy = 1, 1
-                
-    return dx,dy
-bezier.bezierslopeatt = bezierslopeatt
+
+    return dx, dy
+	
+bezmisc.bezierslopeatt = bezierslopeatt
 
 
 def ireplace(self,old,new,count=0):
@@ -92,7 +101,7 @@ options = {}
 defaults = {
 'header': """
 G90
-G1Z0
+
 """,
 'footer': """G1 X0 Y0
 M30
@@ -104,59 +113,59 @@ intersection_tolerance = 0.00001
 
 styles = {
         "loft_style" : {
-                'main curve':    str(Style({ 'stroke': '#88f', 'fill': 'none', 'stroke-width':'1', 'marker-end':'url(#Arrow2Mend)' })),
+                'main curve':    simplestyle.formatStyle({ 'stroke': '#88f', 'fill': 'none', 'stroke-width':'1', 'marker-end':'url(#Arrow2Mend)' }),
             },
         "biarc_style" : {
-                'biarc0':    str(Style({ 'stroke': '#88f', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'1' })),
-                'biarc1':    str(Style({ 'stroke': '#8f8', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'1' })),
-                'line':        str(Style({ 'stroke': '#f88', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'1' })),
-                'area':        str(Style({ 'stroke': '#777', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'0.1' })),
+                'biarc0':    simplestyle.formatStyle({ 'stroke': '#88f', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'1' }),
+                'biarc1':    simplestyle.formatStyle({ 'stroke': '#8f8', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'1' }),
+                'line':        simplestyle.formatStyle({ 'stroke': '#f88', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'1' }),
+                'area':        simplestyle.formatStyle({ 'stroke': '#777', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'0.1' }),
             },
         "biarc_style_dark" : {
-                'biarc0':    str(Style({ 'stroke': '#33a', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'1' })),
-                'biarc1':    str(Style({ 'stroke': '#3a3', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'1' })),
-                'line':        str(Style({ 'stroke': '#a33', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'1' })),
-                'area':        str(Style({ 'stroke': '#222', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'0.3' })),
+                'biarc0':    simplestyle.formatStyle({ 'stroke': '#33a', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'1' }),
+                'biarc1':    simplestyle.formatStyle({ 'stroke': '#3a3', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'1' }),
+                'line':        simplestyle.formatStyle({ 'stroke': '#a33', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'1' }),
+                'area':        simplestyle.formatStyle({ 'stroke': '#222', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'0.3' }),
             },
         "biarc_style_dark_area" : {
-                'biarc0':    str(Style({ 'stroke': '#33a', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'0.1' })),
-                'biarc1':    str(Style({ 'stroke': '#3a3', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'0.1' })),
-                'line':        str(Style({ 'stroke': '#a33', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'0.1' })),
-                'area':        str(Style({ 'stroke': '#222', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'0.3' })),
+                'biarc0':    simplestyle.formatStyle({ 'stroke': '#33a', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'0.1' }),
+                'biarc1':    simplestyle.formatStyle({ 'stroke': '#3a3', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'0.1' }),
+                'line':        simplestyle.formatStyle({ 'stroke': '#a33', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'0.1' }),
+                'area':        simplestyle.formatStyle({ 'stroke': '#222', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'0.3' }),
             },
         "biarc_style_i"  : {
-                'biarc0':    str(Style({ 'stroke': '#880', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'1' })),
-                'biarc1':    str(Style({ 'stroke': '#808', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'1' })),
-                'line':        str(Style({ 'stroke': '#088', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'1' })),
-                'area':        str(Style({ 'stroke': '#999', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'0.3' })),
+                'biarc0':    simplestyle.formatStyle({ 'stroke': '#880', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'1' }),
+                'biarc1':    simplestyle.formatStyle({ 'stroke': '#808', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'1' }),
+                'line':        simplestyle.formatStyle({ 'stroke': '#088', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'1' }),
+                'area':        simplestyle.formatStyle({ 'stroke': '#999', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'0.3' }),
             },
         "biarc_style_dark_i" : {
-                'biarc0':    str(Style({ 'stroke': '#dd5', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'1' })),
-                'biarc1':    str(Style({ 'stroke': '#d5d', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'1' })),
-                'line':        str(Style({ 'stroke': '#5dd', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'1' })),
-                'area':        str(Style({ 'stroke': '#aaa', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'0.3' })),
+                'biarc0':    simplestyle.formatStyle({ 'stroke': '#dd5', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'1' }),
+                'biarc1':    simplestyle.formatStyle({ 'stroke': '#d5d', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'1' }),
+                'line':        simplestyle.formatStyle({ 'stroke': '#5dd', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'1' }),
+                'area':        simplestyle.formatStyle({ 'stroke': '#aaa', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'0.3' }),
             },
         "biarc_style_lathe_feed" : {
-                'biarc0':    str(Style({ 'stroke': '#07f', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'.4' })),
-                'biarc1':    str(Style({ 'stroke': '#0f7', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'.4' })),
-                'line':        str(Style({ 'stroke': '#f44', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'.4' })),
-                'area':        str(Style({ 'stroke': '#aaa', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'0.3' })),
+                'biarc0':    simplestyle.formatStyle({ 'stroke': '#07f', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'.4' }),
+                'biarc1':    simplestyle.formatStyle({ 'stroke': '#0f7', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'.4' }),
+                'line':        simplestyle.formatStyle({ 'stroke': '#f44', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'.4' }),
+                'area':        simplestyle.formatStyle({ 'stroke': '#aaa', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'0.3' }),
             },
         "biarc_style_lathe_passing feed" : {
-                'biarc0':    str(Style({ 'stroke': '#07f', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'.4' })),
-                'biarc1':    str(Style({ 'stroke': '#0f7', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'.4' })),
-                'line':        str(Style({ 'stroke': '#f44', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'.4' })),
-                'area':        str(Style({ 'stroke': '#aaa', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'0.3' })),
+                'biarc0':    simplestyle.formatStyle({ 'stroke': '#07f', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'.4' }),
+                'biarc1':    simplestyle.formatStyle({ 'stroke': '#0f7', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'.4' }),
+                'line':        simplestyle.formatStyle({ 'stroke': '#f44', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'.4' }),
+                'area':        simplestyle.formatStyle({ 'stroke': '#aaa', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'0.3' }),
             },
         "biarc_style_lathe_fine feed" : {
-                'biarc0':    str(Style({ 'stroke': '#7f0', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'.4' })),
-                'biarc1':    str(Style({ 'stroke': '#f70', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'.4' })),
-                'line':        str(Style({ 'stroke': '#744', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'.4' })),
-                'area':        str(Style({ 'stroke': '#aaa', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'0.3' })),
+                'biarc0':    simplestyle.formatStyle({ 'stroke': '#7f0', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'.4' }),
+                'biarc1':    simplestyle.formatStyle({ 'stroke': '#f70', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'.4' }),
+                'line':        simplestyle.formatStyle({ 'stroke': '#744', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'.4' }),
+                'area':        simplestyle.formatStyle({ 'stroke': '#aaa', 'fill': 'none', "marker-end":"url(#DrawCurveMarker)", 'stroke-width':'0.3' }),
             },
-        "area artefact":         str(Style({ 'stroke': '#ff0000', 'fill': '#ffff00', 'stroke-width':'1' })),
-        "area artefact arrow":    str(Style({ 'stroke': '#ff0000', 'fill': '#ffff00', 'stroke-width':'1' })),
-        "dxf_points":             str(Style({ "stroke": "#ff0000", "fill": "#ff0000"})),
+        "area artefact":         simplestyle.formatStyle({ 'stroke': '#ff0000', 'fill': '#ffff00', 'stroke-width':'1' }),
+        "area artefact arrow":    simplestyle.formatStyle({ 'stroke': '#ff0000', 'fill': '#ffff00', 'stroke-width':'1' }),
+        "dxf_points":             simplestyle.formatStyle({ "stroke": "#ff0000", "fill": "#ff0000"}),
         
     }
 
@@ -336,7 +345,7 @@ def csp_true_bounds(csp) :
     maxy = [float("-inf"), 0, 0, 0]
     for i in range(len(csp)):
         for j in range(1,len(csp[i])):
-            ax,ay,bx,by,cx,cy,x0,y0 = bezier.bezierparameterize((csp[i][j-1][1],csp[i][j-1][2],csp[i][j][0],csp[i][j][1]))
+            ax,ay,bx,by,cx,cy,x0,y0 = bezmisc.bezierparameterize((csp[i][j-1][1],csp[i][j-1][2],csp[i][j][0],csp[i][j][1]))
             roots = cubic_solver(0, 3*ax, 2*bx, cx)     + [0,1]
             for root in roots :
                 if type(root) is complex and abs(root.imag)<1e-10:
@@ -373,8 +382,8 @@ def csp_segments_intersection(sp1,sp2,sp3,sp4) :
     a, b = csp_segment_to_bez(sp1,sp2), csp_segment_to_bez(sp3,sp4)
 
     def polish_intersection(a,b,ta,tb, tolerance = intersection_tolerance) :
-        ax,ay,bx,by,cx,cy,dx,dy            = bezier.bezierparameterize(a)
-        ax1,ay1,bx1,by1,cx1,cy1,dx1,dy1    = bezier.bezierparameterize(b)
+        ax,ay,bx,by,cx,cy,dx,dy            = bezmisc.bezierparameterize(a)
+        ax1,ay1,bx1,by1,cx1,cy1,dx1,dy1    = bezmisc.bezierparameterize(b)
         i = 0
         F, F1 =  [.0,.0], [[.0,.0],[.0,.0]]
         while i==0 or (abs(F[0])**2+abs(F[1])**2 > tolerance and i<10):
@@ -518,7 +527,7 @@ def csp_max_curvature(sp1,sp2):
     
 
 def csp_curvature_at_t(sp1,sp2,t, depth = 3) :
-    ax,ay,bx,by,cx,cy,dx,dy = bezier.bezierparameterize(csp_segment_to_bez(sp1,sp2))
+    ax,ay,bx,by,cx,cy,dx,dy = bezmisc.bezierparameterize(csp_segment_to_bez(sp1,sp2))
     
     #curvature = (x'y''-y'x'') / (x'^2+y'^2)^1.5 
     
@@ -554,7 +563,7 @@ def csp_curvature_radius_at_t(sp1,sp2,t) :
 
 def csp_special_points(sp1,sp2) :
     # special points = curvature == 0
-    ax,ay,bx,by,cx,cy,dx,dy = bezier.bezierparameterize((sp1[1],sp1[2],sp2[0],sp2[1]))    
+    ax,ay,bx,by,cx,cy,dx,dy = bezmisc.bezierparameterize((sp1[1],sp1[2],sp2[0],sp2[1]))    
     a = 3*ax*by-3*ay*bx
     b = 3*ax*cy-3*cx*ay
     c = bx*cy-cx*by
@@ -601,13 +610,13 @@ def csp_at_t(sp1,sp2,t):
 
 def csp_splitatlength(sp1, sp2, l = 0.5, tolerance = 0.01):
     bez = (sp1[1][:],sp1[2][:],sp2[0][:],sp2[1][:])
-    t = bezier.beziertatlength(bez, l, tolerance)
+    t = bezmisc.beziertatlength(bez, l, tolerance)
     return csp_split(sp1, sp2, t)    
 
     
 def cspseglength(sp1,sp2, tolerance = 0.001):
     bez = (sp1[1][:],sp1[2][:],sp2[0][:],sp2[1][:])
-    return bezier.bezierlength(bez, tolerance)    
+    return bezmisc.bezierlength(bez, tolerance)    
 
 
 def csplength(csp):
@@ -658,7 +667,7 @@ def rebuild_csp (csp, segs, s=None):
 
 def csp_slope(sp1,sp2,t):
     bez = (sp1[1][:],sp1[2][:],sp2[0][:],sp2[1][:])
-    return bezier.bezierslopeatt(bez,t)
+    return bezmisc.bezierslopeatt(bez,t)
 
 
 def csp_line_intersection(l1,l2,sp1,sp2):
@@ -674,7 +683,7 @@ def csp_line_intersection(l1,l2,sp1,sp2):
         coef1=1
         coef2=aa/cc
     bez = (sp1[1][:],sp1[2][:],sp2[0][:],sp2[1][:])
-    ax,ay,bx,by,cx,cy,x0,y0=bezier.bezierparameterize(bez)
+    ax,ay,bx,by,cx,cy,x0,y0=bezmisc.bezierparameterize(bez)
     a=coef1*ay-coef2*ax
     b=coef1*by-coef2*bx
     c=coef1*cy-coef2*cx
@@ -791,10 +800,9 @@ def point_to_arc_distance(p, arc):
             else :
                 return (d2, [P2.x,P2.y])
 
-
-def csp_to_arc_distance(sp1,sp2, arc1, arc2, tolerance = 0.01 ): # arc = [start,end,center,alpha]
+def csp_to_arc_distance(sp1,sp2, arc1, arc2, tolerance = 0.001 ): # arc = [start,end,center,alpha]
     n, i = 10, 0
-    d, d1, dl = (0,[0,0]), (0,[0,0]), 0
+    d, d1, dl = (0,(0,0)), (0,(0,0)), 0
     while i<1 or (abs(d1[0]-dl[0])>tolerance and i<4):
         i += 1
         dl = d1*1    
@@ -802,9 +810,12 @@ def csp_to_arc_distance(sp1,sp2, arc1, arc2, tolerance = 0.01 ): # arc = [start,
             t = float(j)/n
             p = csp_at_t(sp1,sp2,t) 
             d = min(point_to_arc_distance(p,arc1), point_to_arc_distance(p,arc2))
-            d1 = max(d1,d)
+            if d1[0] > d[0]:
+                d1 =d1
+            else:
+                d1 = d
         n=n*2
-    return d1
+    return d1[0]
 
 
 def csp_simple_bound_to_point_distance(p, csp):
@@ -953,7 +964,7 @@ def csp_reverse(csp) :
 
 
 def csp_normalized_slope(sp1,sp2,t) :
-    ax,ay,bx,by,cx,cy,dx,dy=bezier.bezierparameterize((sp1[1][:],sp1[2][:],sp2[0][:],sp2[1][:]))
+    ax,ay,bx,by,cx,cy,dx,dy=bezmisc.bezierparameterize((sp1[1][:],sp1[2][:],sp2[0][:],sp2[1][:]))
     if sp1[1]==sp2[1]==sp1[2]==sp2[0] : return [1.,0.]
     f1x = 3*ax*t*t+2*bx*t+cx
     f1y = 3*ay*t*t+2*by*t+cy
@@ -995,7 +1006,7 @@ def csp_normalized_normal(sp1,sp2,t) :
 
 
 def csp_parameterize(sp1,sp2):
-    return bezier.bezierparameterize(csp_segment_to_bez(sp1,sp2))
+    return bezmisc.bezierparameterize(csp_segment_to_bez(sp1,sp2))
 
 
 def csp_concat_subpaths(*s):
@@ -1020,9 +1031,9 @@ def csp_draw(csp, color="#05f", group = None, style="fill:none;", width = .1, co
     if csp!=[] and csp!=[[]] :
         if group == None : group = options.doc_root 
         style += "stroke:"+color+";"+ "stroke-width:%0.4fpx;"%width
-        args = {"d": CubicSuperPath.to_path(csp), "style":style}
+        args = {"d": cubicsuperpath.formatPath(csp), "style":style}
         if comment!="" : args["comment"] = str(comment)
-        etree.SubElement( group, inkex.addNS('path','svg'), args )                            
+        inkex.etree.SubElement( group, inkex.addNS('path','svg'), args )                            
 
     
 def csp_subpaths_end_to_start_distance2(s1,s2):
@@ -1118,7 +1129,7 @@ def csp_segment_convex_hull(sp1,sp2):
     if not (m1 and m2) and m3 : return [c,a,d]
     if not (m1 and m3) and m2 : return [b,c,d]
     
-    raise ValueError("csp_segment_convex_hull happend something that shouldnot happen!")    
+    raise(ValueError, "csp_segment_convex_hull happend something that shouldnot happen!")    
 
     
 ################################################################################
@@ -1142,8 +1153,9 @@ def bounds_intersect(a, b) :
     return not ( (a[0]>b[2]) or (b[0]>a[2]) or (a[1]>b[3]) or (b[1]>a[3]) )
 
 
-def tpoint(a,b,t):
-    return [a[0]+t*(b[0]-a[0]),a[1]+t*(b[1]-a[1])]
+def tpoint(points,t):
+    (x1,y1),(x2,y2) = points
+    return [x1+t*(x2-x1),y1+t*(y2-y1)]
 
 
 def bez_to_csp_segment(bez) :
@@ -1176,10 +1188,10 @@ def bez_normalized_slope(bez,t):
 ###    Some vector functions
 ################################################################################
     
-def normalize(d) :
-    l = math.sqrt(d[0]**2+d[1]**2)
+def normalize(x,y) :
+    l = math.sqrt(x**2+y**2)
     if l == 0 : return [0.,0.]
-    else :         return [d[0]/l, d[1]/l]
+    else :         return [x/l, y/l]
 
 
 def cross(a,b) :
@@ -1258,21 +1270,21 @@ def atan2(*arg):
         
         return (math.pi/2 - math.atan2(arg[0],arg[1]) ) % math.pi2
     else :
-        raise ValueError("Bad argumets for atan! (%s)" % arg)  
+        raise(ValueError, "Bad argumets for atan! (%s)" % arg  )
 
 
 def draw_text(text,x,y,style = None, font_size = 20) :
     if style == None : 
         style = "font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;fill:#000000;fill-opacity:1;stroke:none;"
     style += "font-size:%fpx;"%font_size
-    t = etree.SubElement(    options.doc_root, inkex.addNS('text','svg'), {    
+    t = inkex.etree.SubElement(    options.doc_root, inkex.addNS('text','svg'), {    
                             'x':    str(x),
                             inkex.addNS("space","xml"):"preserve",
                             'y':    str(y)
                         })
     text = str(text).split("\n")
     for s in text :
-        span = etree.SubElement( t, inkex.addNS('tspan','svg'), 
+        span = inkex.etree.SubElement( t, inkex.addNS('tspan','svg'), 
                         {
                             'x':    str(x),
                             'y':    str(+y),
@@ -1287,9 +1299,9 @@ def draw_pointer(x,color = "#f00", figure = "cross", comment = "", width = .1) :
         s = ""
         for i in range(1,len(x)/2) :
             s+= " %s, %s " %(x[i*2],x[i*2+1])
-        etree.SubElement( options.doc_root, inkex.addNS('path','svg'), {"d": "M %s,%s L %s"%(x[0],x[1],s), "style":"fill:none;stroke:%s;stroke-width:%f;"%(color,width),"comment":str(comment)} )
+        inkex.etree.SubElement( options.doc_root, inkex.addNS('path','svg'), {"d": "M %s,%s L %s"%(x[0],x[1],s), "style":"fill:none;stroke:%s;stroke-width:%f;"%(color,width),"comment":str(comment)} )
     else :
-        etree.SubElement( options.doc_root, inkex.addNS('path','svg'), {"d": "m %s,%s l 10,10 -20,-20 10,10 -10,10, 20,-20"%(x[0],x[1]), "style":"fill:none;stroke:%s;stroke-width:%f;"%(color,width),"comment":str(comment)} )
+        inkex.etree.SubElement( options.doc_root, inkex.addNS('path','svg'), {"d": "m %s,%s l 10,10 -20,-20 10,10 -10,10, 20,-20"%(x[0],x[1]), "style":"fill:none;stroke:%s;stroke-width:%f;"%(color,width),"comment":str(comment)} )
 
 
 def straight_segments_intersection(a,b, true_intersection = True) : # (True intersection means check ta and tb are in [0,1])
@@ -1381,6 +1393,7 @@ class P:
         return P(self.x * other, self.y * other)
     __rmul__ = __mul__
     def __truediv__(self, other): return P(self.x / other, self.y / other)
+    def __div__(self, other): return P(self.x / other, self.y / other)
     def mag(self): return math.hypot(self.x, self.y)
     def unit(self):
         h = self.mag()
@@ -1634,7 +1647,7 @@ def csp_offset(csp, r) :
         #for k,t in intersection[i]:
         #    draw_pointer(csp_at_t(subpath_offset[k-1], subpath_offset[k], t))
             
-    #etree.SubElement( options.doc_root, inkex.addNS('path','svg'), {"d": cubicsuperpath.formatPath(unclipped_offset), "style":"fill:none;stroke:#0f0;"} )    
+    #inkex.etree.SubElement( options.doc_root, inkex.addNS('path','svg'), {"d": cubicsuperpath.formatPath(unclipped_offset), "style":"fill:none;stroke:#0f0;"} )    
     print_("Offsetted path in %s"%(time.time()-time_))
     time_ = time.time()
     
@@ -1839,11 +1852,11 @@ def biarc(sp1, sp2, z1, z2, depth=0):
     elif     csmall and a!=0:    beta = -b/a 
     elif not asmall:     
         discr = b*b-4*a*c
-        if discr < 0:    raise ValueError(a,b,c,discr)
+        if discr < 0:    raise(ValueError, (a,b,c,discr))
         disq = discr**.5
         beta1 = (-b - disq) / 2 / a
         beta2 = (-b + disq) / 2 / a
-        if beta1*beta2 > 0 :    raise ValueError(a,b,c,disq,beta1,beta2)
+        if beta1*beta2 > 0 :    raise(ValueError, (a,b,c,disq,beta1,beta2))
         beta = max(beta1, beta2)
     elif    asmall and bsmall:    
         return biarc_split(sp1, sp2, z1, z2, depth)
@@ -1871,7 +1884,7 @@ def biarc(sp1, sp2, z1, z2, depth=0):
     if R1==None or R2==None or (R1-P0).mag()<straight_tolerance or (R2-P2).mag()<straight_tolerance    : return [ [sp1[1],'line', 0, 0, sp2[1], [z1,z2]] ]
     
     d = csp_to_arc_distance(sp1,sp2, [P0,P2,R1,a1],[P2,P4,R2,a2])
-    if d[0] > 1 and depth<options.biarc_max_split_depth     : return biarc_split(sp1, sp2, z1, z2, depth)
+    if d > 1 and depth<options.biarc_max_split_depth     : return biarc_split(sp1, sp2, z1, z2, depth)
     else:
         if R2.mag()*a2 == 0 : zm = z2
         else : zm  = z1 + (z2-z1)*(abs(R1.mag()*a1))/(abs(R2.mag()*a2)+abs(R1.mag()*a1)) 
@@ -2207,7 +2220,7 @@ class Polygon:
         
         while len(edges)>0 :
             poly = []
-            if loops > len_edges  : raise ValueError("Hull error")
+            if loops > len_edges  : raise(ValueError, "Hull error")
             loops+=1
             # Find left most vertex.
             start = (1e100,1)
@@ -2218,7 +2231,7 @@ class Polygon:
             loops1 = 0
             while (last[1]!=start[0] or first_run) :     
                 first_run = False
-                if loops1 > len_edges  : raise ValueError("Hull error")
+                if loops1 > len_edges  : raise(ValueError, "Hull error")
                 loops1 += 1
                 next = get_closes_edge_by_angle(edges[last[1]],last)
                 #draw_pointer(next[0]+next[1],"Green","line", comment=i, width= 1)
@@ -2423,27 +2436,27 @@ class laser_gcode(inkex.Effect):
 
     def __init__(self):
         inkex.Effect.__init__(self)
-        self.arg_parser.add_argument("--directory",                        type=str,          dest="directory",                           default="",                             help="Output directory")
-        self.arg_parser.add_argument("--filename",                         type=str,          dest="file",                                default="output.gcode",                 help="File name")            
-        self.arg_parser.add_argument("--add-numeric-suffix-to-filename",   type=inkex.Boolean,         dest="add_numeric_suffix_to_filename",      default=False,                          help="Add numeric suffix to file name")  
-        self.arg_parser.add_argument("--laser-command",                    type=str,          dest="laser_command",                       default="M03",                      help="Laser gcode command")
-        self.arg_parser.add_argument("--laser-off-command",                type=str,          dest="laser_off_command",                   default="M05",                         help="Laser gcode end command")       
-        self.arg_parser.add_argument("--laser-speed",                      type=int,             dest="laser_speed",                         default="100",                          help="Laser speed (mm/min)")
-        self.arg_parser.add_argument("--travel-speed",                     type=str,          dest="travel_speed",                        default="3000",                         help="Travel speed (mm/min)")
-        self.arg_parser.add_argument("--laser-power",                      type=int,             dest="laser_power",                         default="256",                          help="S# is 256 or 10000 for full power")
-        self.arg_parser.add_argument("--passes",                           type=int,             dest="passes",                              default="1",                            help="Quantity of passes")
-        self.arg_parser.add_argument("--posx",                             type=int,             dest="posx",                                default="0",                          help="")
-        self.arg_parser.add_argument("--posy",                             type=int,             dest="posy",                                default="0",                            help="")
-        self.arg_parser.add_argument("--pass-depth",                       type=str,          dest="pass_depth",                          default="1",                            help="Depth of laser cut")
-        self.arg_parser.add_argument("--power-delay",                      type=str,          dest="power_delay",                         default="100",                          help="Laser power-on delay (ms)")
-        self.arg_parser.add_argument("--suppress-all-messages",            type=inkex.Boolean,         dest="suppress_all_messages",               default=True,                           help="Hide messages during g-code generation")
-        self.arg_parser.add_argument("--create-log",                       type=inkex.Boolean,         dest="log_create_log",                      default=False,                          help="Create log files")
-        self.arg_parser.add_argument("--log-filename",                     type=str,          dest="log_filename",                        default='',                             help="Create log files")
-        self.arg_parser.add_argument("--engraving-draw-calculation-paths", type=inkex.Boolean,         dest="engraving_draw_calculation_paths",    default=False,                          help="Draw additional graphics to debug engraving path")
-        self.arg_parser.add_argument("--iscenter",                         type=inkex.Boolean,         dest="iscenter",                            default=False,                          help="Draw additional graphics to debug engraving pat")
-        self.arg_parser.add_argument("--unit",                             type=str,          dest="unit",                                default="G21 (All units in mm)",        help="Units either mm or inches")
-        self.arg_parser.add_argument("--active-tab",                       type=str,          dest="active_tab",                          default="",                             help="Defines which tab is active")
-        self.arg_parser.add_argument("--biarc-max-split-depth",            type=int,             dest="biarc_max_split_depth",               default="4",                            help="Defines maximum depth of splitting while approximating using biarcs.")                
+        self.OptionParser.add_option("-d", "--directory",                       action="store", type="string",          dest="directory",                           default="",                             help="Output directory")
+        self.OptionParser.add_option("-f", "--filename",                        action="store", type="string",          dest="file",                                default="output.gcode",                 help="File name")            
+        self.OptionParser.add_option("",   "--add-numeric-suffix-to-filename",  action="store", type="inkbool",         dest="add_numeric_suffix_to_filename",      default=False,                          help="Add numeric suffix to file name")  
+        self.OptionParser.add_option("",   "--laser-command",                   action="store", type="string",          dest="laser_command",                       default="M03",                          help="Laser gcode command")
+        self.OptionParser.add_option("",   "--laser-off-command",               action="store", type="string",          dest="laser_off_command",                   default="M05",                          help="Laser gcode end command")       
+        self.OptionParser.add_option("",   "--laser-speed",                     action="store", type="int",             dest="laser_speed",                         default="100",                          help="Laser speed (mm/min)")
+        self.OptionParser.add_option("",   "--travel-speed",                    action="store", type="string",          dest="travel_speed",                        default="3000",                         help="Travel speed (mm/min)")
+        self.OptionParser.add_option("",   "--laser-power",                     action="store", type="int",             dest="laser_power",                         default="256",                          help="S# is 256 or 10000 for full power")
+        self.OptionParser.add_option("",   "--passes",                          action="store", type="int",             dest="passes",                              default="1",                            help="Quantity of passes")
+        self.OptionParser.add_option("",   "--posx",                            action="store", type="int",             dest="posx",                                default="0",                            help="")
+        self.OptionParser.add_option("",   "--posy",                            action="store", type="int",             dest="posy",                                default="0",                            help="")
+        self.OptionParser.add_option("",   "--pass-depth",                      action="store", type="string",          dest="pass_depth",                          default="1",                            help="Depth of laser cut")
+        self.OptionParser.add_option("",   "--power-delay",                     action="store", type="string",          dest="power_delay",                         default="100",                          help="Laser power-on delay (ms)")
+        self.OptionParser.add_option("",   "--suppress-all-messages",           action="store", type="inkbool",         dest="suppress_all_messages",               default=True,                           help="Hide messages during g-code generation")
+        self.OptionParser.add_option("",   "--create-log",                      action="store", type="inkbool",         dest="log_create_log",                      default=False,                          help="Create log files")
+        self.OptionParser.add_option("",   "--log-filename",                    action="store", type="string",          dest="log_filename",                        default='',                             help="Create log files")
+        self.OptionParser.add_option("",   "--engraving-draw-calculation-paths",action="store", type="inkbool",         dest="engraving_draw_calculation_paths",    default=False,                          help="Draw additional graphics to debug engraving path")
+        self.OptionParser.add_option("",   "--iscenter",                        action="store", type="inkbool",         dest="iscenter",                            default=False,                          help="Draw additional graphics to debug engraving pat")
+        self.OptionParser.add_option("",   "--unit",                            action="store", type="string",          dest="unit",                                default="G21 (All units in mm)",        help="Units either mm or inches")
+        self.OptionParser.add_option("",   "--active-tab",                      action="store", type="string",          dest="active_tab",                          default="",                             help="Defines which tab is active")
+        self.OptionParser.add_option("",   "--biarc-max-split-depth",           action="store", type="int",             dest="biarc_max_split_depth",               default="4",                            help="Defines maximum depth of splitting while approximating using biarcs.")                
         
     def parse_curve(self, p, layer, w = None, f = None):
             c = []
@@ -2457,10 +2470,14 @@ class laser_gcode(inkex.Effect):
             keys = [0]
             while len(k)>0:
                 end = p[keys[-1]][-1][1]
-                dist = tuple()
+                dist = None
                 for i in range(len(k)):
                     start = p[k[i]][0][1]
-                    dist = max(   ( -( ( end[0]-start[0])**2+(end[1]-start[1])**2 ) ,i)    ,   dist )
+                    if dist is None:
+                        dist =  ( -( ( end[0]-start[0])**2+(end[1]-start[1])**2 ) ,i)
+                    else:
+                        dist = max(   ( -( ( end[0]-start[0])**2+(end[1]-start[1])**2 ) ,i)    ,   dist )
+                    # dist = max(   ( -( ( end[0]-start[0])**2+(end[1]-start[1])**2 ) ,i)    ,   dist )
                 keys += [k[dist[1]]]
                 del k[dist[1]]
             for k in keys:
@@ -2482,27 +2499,27 @@ class laser_gcode(inkex.Effect):
         self.get_defs()
         # Add marker to defs if it doesnot exists
         if "DrawCurveMarker" not in self.defs : 
-            defs = etree.SubElement( self.document.getroot(), inkex.addNS("defs","svg"))
-            marker = etree.SubElement( defs, inkex.addNS("marker","svg"), {"id":"DrawCurveMarker","orient":"auto","refX":"-8","refY":"-2.41063","style":"overflow:visible"})
-            etree.SubElement( marker, inkex.addNS("path","svg"), 
+            defs = inkex.etree.SubElement( self.document.getroot(), inkex.addNS("defs","svg"))
+            marker = inkex.etree.SubElement( defs, inkex.addNS("marker","svg"), {"id":"DrawCurveMarker","orient":"auto","refX":"-8","refY":"-2.41063","style":"overflow:visible"})
+            inkex.etree.SubElement( marker, inkex.addNS("path","svg"), 
                     {    "d":"m -6.55552,-2.41063 0,0 L -13.11104,0 c 1.0473,-1.42323 1.04126,-3.37047 0,-4.82126",
                         "style": "fill:#000044; fill-rule:evenodd;stroke-width:0.62500000;stroke-linejoin:round;"    }
                 )
         if "DrawCurveMarker_r" not in self.defs : 
-            defs = etree.SubElement( self.document.getroot(), inkex.addNS("defs","svg"))
-            marker = etree.SubElement( defs, inkex.addNS("marker","svg"), {"id":"DrawCurveMarker_r","orient":"auto","refX":"8","refY":"-2.41063","style":"overflow:visible"})
-            etree.SubElement( marker, inkex.addNS("path","svg"), 
+            defs = inkex.etree.SubElement( self.document.getroot(), inkex.addNS("defs","svg"))
+            marker = inkex.etree.SubElement( defs, inkex.addNS("marker","svg"), {"id":"DrawCurveMarker_r","orient":"auto","refX":"8","refY":"-2.41063","style":"overflow:visible"})
+            inkex.etree.SubElement( marker, inkex.addNS("path","svg"), 
                     {    "d":"m 6.55552,-2.41063 0,0 L 13.11104,0 c -1.0473,-1.42323 -1.04126,-3.37047 0,-4.82126",
                         "style": "fill:#000044; fill-rule:evenodd;stroke-width:0.62500000;stroke-linejoin:round;"    }
                 )
         for i in [0,1]:
-            style['biarc%s_r'%i] = dict(Style.parse_str(style['biarc%s'%i]))
+            style['biarc%s_r'%i] = simplestyle.parseStyle(style['biarc%s'%i])
             style['biarc%s_r'%i]["marker-start"] = "url(#DrawCurveMarker_r)"
             del(style['biarc%s_r'%i]["marker-end"])
-            style['biarc%s_r'%i] = str(Style(style['biarc%s_r'%i]))
+            style['biarc%s_r'%i] = simplestyle.formatStyle(style['biarc%s_r'%i])
         
         if group==None:
-            group = etree.SubElement( self.layers[min(1,len(self.layers)-1)], inkex.addNS('g','svg'), {"gcodetools": "Preview group"} )
+            group = inkex.etree.SubElement( self.layers[min(1,len(self.layers)-1)], inkex.addNS('g','svg'), {"gcodetools": "Preview group"} )
         s, arcn = '', 0
         
         
@@ -2517,7 +2534,7 @@ class laser_gcode(inkex.Effect):
             
             if s!='':
                 if s[1] == 'line':
-                    etree.SubElement(    group, inkex.addNS('path','svg'), 
+                    inkex.etree.SubElement(    group, inkex.addNS('path','svg'), 
                             {
                                 'style': style['line'],
                                 'd':'M %s,%s L %s,%s' % (s[0][0], s[0][1], si[0][0], si[0][1]),
@@ -2544,7 +2561,7 @@ class laser_gcode(inkex.Effect):
                         a_end = a_st*1
                         a_st = a_st+a
                         st = style['biarc%s_r'%(arcn%2)]
-                    etree.SubElement(    group, inkex.addNS('path','svg'), 
+                    inkex.etree.SubElement(    group, inkex.addNS('path','svg'), 
                          {
                             'style': st,
                              inkex.addNS('cx','sodipodi'):        str(c[0]),
@@ -2635,8 +2652,8 @@ class laser_gcode(inkex.Effect):
             r = ''    
 
             if self.options.iscenter:
-                self.options.posy=(self.svg.unittouu(self.document.getroot().xpath('@height', namespaces=inkex.NSS)[0])/2)
-                self.options.posx=(self.svg.unittouu(self.document.getroot().xpath('@width', namespaces=inkex.NSS)[0])/2)
+                self.options.posy=(self.unittouu(self.document.getroot().xpath('@height', namespaces=inkex.NSS)[0])/2)
+                self.options.posx=(self.unittouu(self.document.getroot().xpath('@width', namespaces=inkex.NSS)[0])/2)
 
             for i in range(6):
                 if c[i]!=None:
@@ -2702,8 +2719,8 @@ class laser_gcode(inkex.Effect):
         while (g!=root):
             if 'transform' in g.keys():
                 t = g.get('transform')
-                t = Transform(t).matrix
-                trans = (Transform(t) * Transform(trans)).matrix if trans != [] else t
+                t = simpletransform.parseTransform(t)
+                trans = simpletransform.composeTransform(t,trans) if trans != [] else t
                 print_(trans)
             g=g.getparent()
         return trans 
@@ -2712,7 +2729,7 @@ class laser_gcode(inkex.Effect):
     def apply_transforms(self,g,csp):
         trans = self.get_transforms(g)
         if trans != []:
-            csp.transform(Transform(trans))
+            simpletransform.applyTransformToPath(trans, csp)
         return csp
 
 
@@ -2890,11 +2907,11 @@ class laser_gcode(inkex.Effect):
                 elif i.tag == inkex.addNS('path','svg'):
                     if "gcodetools"  not in i.keys() :
                         self.paths[layer] = self.paths[layer] + [i] if layer in self.paths else [i]  
-                        if i.get("id") in self.svg.selected :
+                        if i.get("id") in self.selected :
                             self.selected_paths[layer] = self.selected_paths[layer] + [i] if layer in self.selected_paths else [i]  
                 elif i.tag == inkex.addNS("g",'svg'):
-                    recursive_search(i,layer, (i.get("id") in self.svg.selected) )
-                elif i.get("id") in self.svg.selected :
+                    recursive_search(i,layer, (i.get("id") in self.selected) )
+                elif i.get("id") in self.selected :
                     self.error(_("This extension works with Paths and Dynamic Offsets and groups of them only! All other objects will be ignored!\nSolution 1: press Path->Object to path or Shift+Ctrl+C.\nSolution 2: Path->Dynamic offset or Ctrl+J.\nSolution 3: export all contours to PostScript level 2 (File->Save As->.ps) and File->Import this file."),"selection_contains_objects_that_are_not_paths")
                 
                     
@@ -2919,7 +2936,7 @@ class laser_gcode(inkex.Effect):
             point = [[],[]]    
             for  node in i :
                 if node.get('gcodetools') == "Gcodetools orientation point arrow":
-                    point[0] = self.apply_transforms(node,CubicSuperPath(node.get("d")))[0][0][1]
+                    point[0] = self.apply_transforms(node,cubicsuperpath.parsePath(node.get("d")))[0][0][1]
                 if node.get('gcodetools') == "Gcodetools orientation point text":
                     r = re.match(r'(?i)\s*\(\s*(-?\s*\d*(?:,|\.)*\d*)\s*;\s*(-?\s*\d*(?:,|\.)*\d*)\s*;\s*(-?\s*\d*(?:,|\.)*\d*)\s*\)\s*',node.text)
                     point[1] = [float(r.group(1)),float(r.group(2)),float(r.group(3))]
@@ -3049,8 +3066,8 @@ class laser_gcode(inkex.Effect):
 
         self.check_dir() 
         gcode = ""
-
-        biarc_group = etree.SubElement( list(self.selected_paths.keys())[0] if len(self.selected_paths.keys())>0 else self.layers[0], inkex.addNS('g','svg') )
+        vocab = list(self.selected_paths.keys())
+        biarc_group = inkex.etree.SubElement( vocab[0] if len(vocab)>0 else self.layers[0], inkex.addNS('g','svg') )
         print_(("self.layers=",self.layers))
         print_(("paths=",paths))
         for layer in self.layers :
@@ -3063,7 +3080,7 @@ class laser_gcode(inkex.Effect):
                     if "d" not in path.keys() : 
                         self.error(_("Warning: One or more paths dont have 'd' parameter, try to Ungroup (Ctrl+Shift+G) and Object to Path (Ctrl+Shift+C)!"),"selection_contains_objects_that_are_not_paths")
                         continue                    
-                    csp = CubicSuperPath(path.get("d"))
+                    csp = cubicsuperpath.parsePath(path.get("d"))
                     csp = self.apply_transforms(path, csp)
                     if path.get("dxfpoint") == "1":
                         tmp_curve=self.transform_csp(csp, layer)
@@ -3092,7 +3109,7 @@ class laser_gcode(inkex.Effect):
         if layer in self.orientation_points:
             self.error(_("Active layer already has orientation points! Remove them or select another layer!"),"active_layer_already_has_orientation_points")
         
-        orientation_group = etree.SubElement(layer, inkex.addNS('g','svg'), {"gcodetools":"Gcodetools orientation group"})
+        orientation_group = inkex.etree.SubElement(layer, inkex.addNS('g','svg'), {"gcodetools":"Gcodetools orientation group"})
 
         # translate == ['0', '-917.7043']
         if layer.get("transform") != None :
@@ -3101,7 +3118,7 @@ class laser_gcode(inkex.Effect):
             translate = [0,0]
 
         # doc height in pixels (38 mm == 134.64566px)
-        doc_height = self.svg.unittouu(self.document.getroot().xpath('@height', namespaces=inkex.NSS)[0])
+        doc_height = self.unittouu(self.document.getroot().xpath('@height', namespaces=inkex.NSS)[0])
 
         if self.document.getroot().get('height') == "100%" :
             doc_height = 1052.3622047
@@ -3128,14 +3145,14 @@ class laser_gcode(inkex.Effect):
             # si have correct coordinates
             # if layer have any tranform it will be in translate so lets add that
             si = [i[0]*orientation_scale, (i[1]*orientation_scale)+float(translate[1])]
-            g = etree.SubElement(orientation_group, inkex.addNS('g','svg'), {'gcodetools': "Gcodetools orientation point (2 points)"})
-            etree.SubElement(    g, inkex.addNS('path','svg'), 
+            g = inkex.etree.SubElement(orientation_group, inkex.addNS('g','svg'), {'gcodetools': "Gcodetools orientation point (2 points)"})
+            inkex.etree.SubElement(    g, inkex.addNS('path','svg'), 
                 {
                     'style':    "stroke:none;fill:#000000;",     
                     'd':'m %s,%s 2.9375,-6.343750000001 0.8125,1.90625 6.843748640396,-6.84374864039 0,0 0.6875,0.6875 -6.84375,6.84375 1.90625,0.812500000001 z z' % (si[0], -si[1]+doc_height),
                     'gcodetools': "Gcodetools orientation point arrow"
                 })
-            t = etree.SubElement(    g, inkex.addNS('text','svg'), 
+            t = inkex.etree.SubElement(    g, inkex.addNS('text','svg'), 
                 {
                     'style':    "font-size:10px;font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;fill:#000000;fill-opacity:1;stroke:none;",
                     inkex.addNS("space","xml"):"preserve",
@@ -3189,4 +3206,4 @@ class laser_gcode(inkex.Effect):
         self.laser()
 
 e = laser_gcode()
-e.run()     
+e.affect()     

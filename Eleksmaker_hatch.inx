@@ -4,14 +4,14 @@
   <id>command.Eleksmaker Gcode.Eleksmaker_hatch</id>
   <dependency type="extension">org.inkscape.output.svg.inkscape</dependency>
   <dependency type="executable" location="extensions">Eleksmaker_hatch.py</dependency>
-  <dependency type="executable" location="extensions">inkex.py</dependency>
+  <!-- <dependency type="executable" location="extensions">inkex.py</dependency>
   <dependency type="executable" location="extensions">simplepath.py</dependency>
   <dependency type="executable" location="extensions">simpletransform.py</dependency>
   <dependency type="executable" location="extensions">simplestyle.py</dependency>
   <dependency type="executable" location="extensions">cubicsuperpath.py</dependency>
   <dependency type="executable" location="extensions">cspsubdiv.py</dependency>
   <dependency type="executable" location="extensions">bezmisc.py</dependency>
-  <dependency type="executable" location="extensions">plot_utils.py</dependency>
+  <dependency type="executable" location="extensions">plot_utils.py</dependency> -->
 
 <param name="tab" type="notebook">
   <page name="splash" _gui-text="Image Filling Gocde">
