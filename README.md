@@ -25,3 +25,15 @@ Managed to send generated GCode from Inkscape 1.0 to EleksDraw machine using Can
 (all on MacOS)
 
 For scaling issues, see lines 3114 and 3119
+
+# Installation
+
+- Install Inkscape
+- Go to https://wiki.evilmadscientist.com/Axidraw_Software_Installation
+- Install the axidraw extension for Inkscape MANUALLY. (see the documentation)
+- Install the eleksmaker-inkscape-extension
+    - Download the zip file
+    - Open the folder
+    - copy all the files into the inkscape extension folder
+        - Go to Inkscape > Edit > Preferences > System > User extension
+- Re-launch Inkscape
